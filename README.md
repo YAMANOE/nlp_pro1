@@ -1,63 +1,88 @@
-# Toxic Content Classification using LSTM
+# 🔍 Toxic Text Classification: LSTM vs DistilBERT+LoRA
 
-This project implements a deep learning pipeline to classify user-generated content (text + image descriptions) into multiple toxic categories using a Bidirectional LSTM model in TensorFlow/Keras.
+This document compares two different approaches for multi-class toxic content classification:
 
----
-
-## 🧠 Project Overview
-
-The goal is to build a multi-class classifier that detects types of toxic content based on textual input, combining query data and image descriptions.
+1. **LSTM-based Deep Learning Model**
+2. **DistilBERT with Parameter-Efficient Fine-Tuning (LoRA)**
 
 ---
 
-## 🗂️ Dataset
+## 🧠 1. LSTM-Based Model
 
-- **Source**: Custom dataset (`cellula toxic data`)
-- **Input Features**:
-  - `query`
-  - `image descriptions`
-- **Target**:
-  - `Toxic Category` (Multi-class label with categories like: Hate Speech, Harassment, Violent Crimes, etc.)
+### ✅ **Overview**
+- A deep neural network using Bidirectional LSTM layers.
+- Input: Concatenated `query` and `image descriptions` fields.
+- Preprocessing: Custom text cleaning, tokenization, padding.
 
----
+### ⚙️ **Architecture**
+- Embedding Layer  
+- Two Bidirectional LSTM layers  
+- Dense (ReLU) + Dropout  
+- Output: Dense Softmax layer
 
-## ⚙️ Preprocessing Steps
+### 📊 **Performance**
+- Accuracy: **88%**
+- F1 Score (Weighted): **0.89**
+- Performed well on most classes, especially:
+  - **Violent Crimes**, **Suicide & Self-Harm**: F1 ≈ 1.0
+- Weakest class: **Unknown S-Type**
 
-1. **Text Construction**:  
-   Concatenate `query` and `image descriptions` into a single field called `text`.
-
-2. **Cleaning**:
-   - Lowercase conversion
-   - Removing newlines and special characters
-   - Keeping only alphabetic characters
-
-3. **Tokenization & Padding**:
-   - Using Keras `Tokenizer` with OOV token
-   - Texts converted to sequences and padded to the max sequence length
-
-4. **Label Encoding**:
-   - Encode textual labels into integers using `LabelEncoder`
-
-5. **Train-Test Split**:
-   - Stratified 80/20 split
-
-6. **Handling Imbalanced Classes**:
-   - Applied `RandomOverSampler` to oversample minority classes in training data
-   - Calculated `class_weight` for weighted loss during training
+### 💾 Artifacts
+- `toxic_content_lstm.h5`
+- `tokenizer.pickle`, `label_encoder.pickle`
 
 ---
 
-## 🧠 Model Architecture
+## 🤖 2. DistilBERT + LoRA (PEFT)
 
-A deep Bidirectional LSTM model was designed with the following key features:
+### ✅ **Overview**
+- Used HuggingFace's Transformers library
+- DistilBERT model with LoRA for efficient fine-tuning
+- Tokenized using `DistilBertTokenizerFast`
 
-- Embedding layer (dimension = 128)
-- Two stacked Bidirectional LSTM layers
-- Dense layer with L2 regularization
-- Dropout layers (rate = 0.4) for regularization
-- Output layer with Softmax activation for multi-class classification
+### ⚙️ **Setup**
+- Parameter-efficient fine-tuning: **LoRA**
+- Optimizer: AdamW
+- Evaluation strategy: `epoch`
+- Max sequence length: 256
+- Training arguments customized via `TrainingArguments`
 
-```python
-Embedding → BiLSTM → Dropout → BiLSTM → Dropout → Dense(ReLU) → Dropout → Dense(Softmax)
+### 📊 **Performance (on test set)**
+- Accuracy: **67%**
+- F1 Score: **0.62**
+- Prediction Example:
+  - Input: _"How can I hack into someone's account?"_
+  - Predicted Label: `Violent Crimes`
 
+### 💬 Observations
+- Lower accuracy compared to LSTM, but promising results.
+- Pretrained transformer may require more epochs or larger dataset.
+- Easier to extend to multilingual or context-rich tasks.
+
+---
+
+## ⚔️ Comparison Summary
+
+| Feature                  | LSTM Model       | DistilBERT + LoRA        |
+|--------------------------|------------------|---------------------------|
+| Type                    | RNN              | Transformer (PEFT)        |
+| Training Time           | Moderate         | Slower (depends on GPU)   |
+| Accuracy                | 88%              | 67%                       |
+| F1 Score (Weighted)     | 0.89             | 0.62                      |
+| Explainability          | Higher            | Lower (but flexible)      |
+| Pretraining             | No               | Yes (via DistilBERT)      |
+| Class Balance Handling  | RandomOversampler + Class Weights | Token-level adaptation + LoRA |
+
+---
+
+## 🧩 Final Notes
+- **LSTM**: Better for smaller, balanced datasets. Fast and interpretable.
+- **DistilBERT + LoRA**: Better scalability and context handling, but needs fine-tuning and more data.
+
+➡️ **Future Work**: Try hybrid models or test other transformer backbones like `BERT`, `RoBERTa`, or multilingual models.
+
+---
+
+## 👨‍💻 Author
+Yaman Obiedat  
 

@@ -1,119 +1,130 @@
 import pandas as pd
-from sklearn.preprocessing import LabelEncoder
-from sklearn.model_selection import train_test_split
-from datasets import Dataset
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, TrainingArguments, Trainer
-from peft import LoraConfig, get_peft_model, TaskType
-import torch
-from sklearn.metrics import classification_report, confusion_matrix
 import numpy as np
-import pickle
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder
+from transformers import DistilBertTokenizer, DistilBertForSequenceClassification, TrainingArguments, Trainer
+from datasets import Dataset
+import torch
+from peft import LoraConfig, get_peft_model, TaskType
+import evaluate
 
-# --- 1. Load and clean data ---
+# Load and preprocess the dataset
 df = pd.read_csv(r"C:\Users\user\OneDrive\Desktop\lac\NLP_cellula\cellula toxic data  (1).csv")
 
-def clean_text(text):
-    text = str(text).lower()
-    text = text.replace('\n', ' ').replace('\r', '')
-    text = ''.join([c for c in text if c.isalpha() or c.isspace()])
-    return text
+# Clean the data
+df = df.dropna(subset=['query', 'Toxic Category'])
+df = df[df['Toxic Category'] != 'Viol']  # Remove the partial row at the end
 
-df['text'] = df['query'] + " " + df['image descriptions']
-df['cleaned_text'] = df['text'].apply(clean_text)
-
-# --- 2. Encode labels ---
+# Encode labels
 label_encoder = LabelEncoder()
 df['label'] = label_encoder.fit_transform(df['Toxic Category'])
 
-# --- 3. Split data into train and test sets ---
-train_df, test_df = train_test_split(df[['cleaned_text', 'label']], test_size=0.2, stratify=df['label'], random_state=42)
+# Split data
+train_df, test_df = train_test_split(df, test_size=0.2, random_state=42)
+train_df, val_df = train_test_split(train_df, test_size=0.1, random_state=42)
 
-# --- 4. Convert to HuggingFace Dataset format ---
-train_dataset = Dataset.from_pandas(train_df)
-test_dataset = Dataset.from_pandas(test_df)
+# Initialize tokenizer
+tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
 
-# --- 5. Initialize tokenizer ---
-tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased")
+# Tokenization function
+def tokenize_function(examples):
+    return tokenizer(examples['query'], padding='max_length', truncation=True, max_length=128)
 
-def tokenize(batch):
-    return tokenizer(batch["cleaned_text"], truncation=True, padding=True)
+# Convert to HuggingFace datasets
+train_dataset = Dataset.from_pandas(train_df[['query', 'label']])
+val_dataset = Dataset.from_pandas(val_df[['query', 'label']])
+test_dataset = Dataset.from_pandas(test_df[['query', 'label']])
 
-train_dataset = train_dataset.map(tokenize, batched=True)
-test_dataset = test_dataset.map(tokenize, batched=True)
+# Tokenize datasets
+tokenized_train = train_dataset.map(tokenize_function, batched=True)
+tokenized_val = val_dataset.map(tokenize_function, batched=True)
+tokenized_test = test_dataset.map(tokenize_function, batched=True)
 
-# --- 6. Load DistilBERT model and apply LoRA with target_modules specified ---
-model = AutoModelForSequenceClassification.from_pretrained(
-    "distilbert-base-uncased",
-    num_labels=len(label_encoder.classes_)
+# Set format for PyTorch
+tokenized_train.set_format('torch', columns=['input_ids', 'attention_mask', 'label'])
+tokenized_val.set_format('torch', columns=['input_ids', 'attention_mask', 'label'])
+tokenized_test.set_format('torch', columns=['input_ids', 'attention_mask', 'label'])
+
+# Initialize base model
+model = DistilBertForSequenceClassification.from_pretrained(
+    'distilbert-base-uncased',
+    num_labels=len(label_encoder.classes_),
+    id2label={i: label for i, label in enumerate(label_encoder.classes_)},
+    label2id={label: i for i, label in enumerate(label_encoder.classes_)}
 )
 
-lora_config = LoraConfig(
+# Define LoRA configuration
+peft_config = LoraConfig(
     task_type=TaskType.SEQ_CLS,
+    inference_mode=False,
     r=8,
-    lora_alpha=32,
+    lora_alpha=16,
     lora_dropout=0.1,
-    bias="none",
-    target_modules=["q_lin", "v_lin"]  # specify target modules to avoid error
+    target_modules=['q_lin', 'v_lin']  # Targeting attention layers
 )
 
-model = get_peft_model(model, lora_config)
+# Apply PEFT
+model = get_peft_model(model, peft_config)
+model.print_trainable_parameters()
 
-# --- 7. Set training arguments ---
-training_args = TrainingArguments(
-    output_dir="./lora_results",
-    evaluation_strategy="epoch",
-    save_strategy="epoch",
+# Metrics
+accuracy_metric = evaluate.load('accuracy')
+f1_metric = evaluate.load('f1', average='weighted')
+
+def compute_metrics(eval_pred):
+    logits, labels = eval_pred
+    predictions = np.argmax(logits, axis=-1)
+    accuracy = accuracy_metric.compute(predictions=predictions, references=labels)['accuracy']
+    f1 = f1_metric.compute(predictions=predictions, references=labels, average='weighted')['f1']
+    return {'accuracy': accuracy, 'f1': f1}
+
+# Training arguments
+raining_args = TrainingArguments(
+    output_dir='./results',
+    eval_strategy='epoch',  # Changed from evaluation_strategy
+    save_strategy='epoch',
     learning_rate=2e-5,
     per_device_train_batch_size=16,
     per_device_eval_batch_size=16,
     num_train_epochs=5,
     weight_decay=0.01,
     load_best_model_at_end=True,
+    metric_for_best_model='f1',
     logging_dir='./logs',
-    metric_for_best_model='eval_loss',
-    save_total_limit=2
+    logging_steps=10,
+    report_to='none'
 )
 
-# --- 8. Define metric computation function ---
-def compute_metrics(eval_pred):
-    logits, labels = eval_pred
-    predictions = torch.argmax(torch.tensor(logits), axis=1)
-    accuracy = (predictions == torch.tensor(labels)).float().mean().item()
-    return {"accuracy": accuracy}
 
-# --- 9. Initialize HuggingFace Trainer ---
+# Trainer
 trainer = Trainer(
     model=model,
-    args=training_args,
-    train_dataset=train_dataset,
-    eval_dataset=test_dataset,
-    tokenizer=tokenizer,
-    compute_metrics=compute_metrics
+    #args=training_args,
+    train_dataset=tokenized_train,
+    eval_dataset=tokenized_val,
+    compute_metrics=compute_metrics,
 )
 
-# --- 10. Start training ---
+# Train
 trainer.train()
 
-# --- 11. Evaluate the model ---
-eval_results = trainer.evaluate()
-print(f"\nEvaluation results: {eval_results}")
+# Evaluate
+test_results = trainer.evaluate(tokenized_test)
+print(f"Test results: {test_results}")
 
-# --- 12. Generate classification report and confusion matrix ---
-predictions_output = trainer.predict(test_dataset)
-preds = np.argmax(predictions_output.predictions, axis=1)
-labels = predictions_output.label_ids
+# Save the model
+model.save_pretrained('./toxic_classifier_peft')
+tokenizer.save_pretrained('./toxic_classifier_peft')
 
-print("\nClassification Report:")
-print(classification_report(labels, preds, target_names=label_encoder.classes_))
+# Example inference function
+def classify_toxicity(text):
+    inputs = tokenizer(text, return_tensors='pt', padding=True, truncation=True, max_length=128)
+    with torch.no_grad():
+        outputs = model(**inputs)
+    logits = outputs.logits
+    predicted_class_id = logits.argmax().item()
+    return model.config.id2label[predicted_class_id]
 
-print("\nConfusion Matrix:")
-print(confusion_matrix(labels, preds))
-
-# --- 13. Save model, tokenizer, and label encoder ---
-model.save_pretrained("./lora_model")
-tokenizer.save_pretrained("./lora_model")
-
-with open("label_encoder.pickle", "wb") as f:
-    pickle.dump(label_encoder, f)
-
-print("\nModel, tokenizer, and label encoder saved successfully!")
+# Test the function
+example_text = "How can I hack into someone's account?"
+print(f"Classification for '{example_text}': {classify_toxicity(example_text)}")

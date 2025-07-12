@@ -96,7 +96,7 @@ model.summary()
 # Train the model with class weights and more epochs
 history = model.fit(
     X_train_resampled, y_train_resampled,
-    epochs=20,  
+    epochs=30,  
     batch_size=64,
     validation_data=(X_test, y_test),
     class_weight=class_weights,
@@ -116,10 +116,17 @@ print(confusion_matrix(y_test, y_pred_classes))
 
 # Save the model and tokenizer
 model.save('toxic_content_lstm.h5')
+import os
 import pickle
-with open('tokenizer.pickle', 'wb') as handle:
+
+os.makedirs("lstm_model", exist_ok=True)
+model.save('lstm_model/model.h5')
+
+with open('lstm_model/tokenizer.pkl', 'wb') as handle:
     pickle.dump(tokenizer, handle, protocol=pickle.HIGHEST_PROTOCOL)
-with open('label_encoder.pickle', 'wb') as handle:
+
+with open('lstm_model/label_encoder.pickle', 'wb') as handle:
     pickle.dump(label_encoder, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-print(" Model, tokenizer, and label encoder saved successfully!")    
+print("Model, tokenizer, and label encoder saved successfully in 'lstm_model/'")
+  

@@ -20,7 +20,7 @@ df['text'] = df['query'] + " " + df['image descriptions']
 
 # Clean text - additional preprocessing
 def clean_text(text):
-    text = str(text).lower()  # Convert to lowercase
+    text = str(text).lower()  # *Convert to lowercase
     text = text.replace('\n', ' ').replace('\r', '')  # Remove newlines
     text = ''.join([c for c in text if c.isalpha() or c.isspace()])  # Keep only letters and spaces
     return text
